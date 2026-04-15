@@ -1,0 +1,971 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KasBola - Manajemen Komunitas</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Babel untuk kompilasi React JSX di dalam HTML -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Import Map untuk mendefinisikan lokasi modul React agar dikenali oleh modul lain -->
+    <script type="importmap">
+        {
+            "imports": {
+                "react": "https://esm.sh/react@18.2.0",
+                "react-dom/client": "https://esm.sh/react-dom@18.2.0/client"
+            }
+        }
+    </script>
+
+    <!-- Konfigurasi Font kustom (Opsional agar lebih elegan) -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-800">
+    
+    <div id="root"></div>
+
+    <!-- Script Utama Aplikasi (React + Firebase) -->
+    <script type="text/babel" data-type="module">
+        import React, { useState, useEffect } from 'react';
+        import { createRoot } from 'react-dom/client';
+        
+        // Import Ikon
+        import { 
+            LayoutDashboard, CalendarDays, Wallet, Plus, Trash2, MapPin, Clock, X, Users, DollarSign,
+            ChevronLeft, CheckCircle2, Circle, UserX, UserCheck, ArrowUpDown, ArrowDownToLine, ArrowUpFromLine, Info
+        } from 'https://esm.sh/lucide-react@0.292.0?external=react';
+
+        // Import Firebase
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, onSnapshot, doc, setDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // --- FIREBASE SETUP ---
+        const firebaseConfig = {
+            apiKey: "AIzaSyCrcvMMZMq9KY4M32ttQc_jgSGVCh3_ydA",
+            authDomain: "finance-b5d3e.firebaseapp.com",
+            projectId: "finance-b5d3e",
+            storageBucket: "finance-b5d3e.firebasestorage.app",
+            messagingSenderId: "750038701540",
+            appId: "1:750038701540:web:776bee9bacdcfcbb7223f1"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        
+        // Menggunakan ID statis untuk standalone deploy
+        const appId = typeof window.__app_id !== 'undefined' ? window.__app_id : 'kasbola-app-prod';
+
+        function App() {
+            const [user, setUser] = useState(null);
+            const [isLoading, setIsLoading] = useState(true);
+
+            const [activeTab, setActiveTab] = useState('dashboard');
+            const [transactions, setTransactions] = useState([]);
+            const [events, setEvents] = useState([]);
+            const [selectedEventId, setSelectedEventId] = useState(null);
+
+            // Modals state
+            const [isKasModalOpen, setIsKasModalOpen] = useState(false);
+            const [isEventModalOpen, setIsEventModalOpen] = useState(false);
+            const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
+
+            // Sorting state (Event Participants)
+            const [sortConfig, setSortConfig] = useState({ key: 'name', direction: 'asc' });
+
+            // --- FIREBASE HOOKS ---
+            useEffect(() => {
+                const initAuth = async () => {
+                    try {
+                        if (typeof window.__initial_auth_token !== 'undefined' && window.__initial_auth_token) {
+                            try {
+                                await signInWithCustomToken(auth, window.__initial_auth_token);
+                            } catch (tokenError) {
+                                console.warn("Token otentikasi internal tidak cocok. Menggunakan login anonim...", tokenError);
+                                await signInAnonymously(auth);
+                            }
+                        } else {
+                            // Ini akan tereksekusi saat aplikasi di-deploy secara mandiri
+                            await signInAnonymously(auth);
+                        }
+                    } catch (error) {
+                        console.error("Auth Error:", error);
+                    }
+                };
+                initAuth();
+                const unsubscribe = onAuthStateChanged(auth, setUser);
+                return () => unsubscribe();
+            }, []);
+
+            useEffect(() => {
+                if (!user) return;
+
+                const txRef = collection(db, 'artifacts', appId, 'public', 'data', 'transactions');
+                const evRef = collection(db, 'artifacts', appId, 'public', 'data', 'events');
+
+                const unsubTx = onSnapshot(txRef, (snapshot) => {
+                    const txData = snapshot.docs.map(doc => doc.data());
+                    setTransactions(txData);
+                }, (error) => console.error("Error fetching transactions:", error));
+
+                const unsubEv = onSnapshot(evRef, (snapshot) => {
+                    const evData = snapshot.docs.map(doc => doc.data());
+                    setEvents(evData);
+                    setIsLoading(false);
+                }, (error) => console.error("Error fetching events:", error));
+
+                return () => {
+                    unsubTx();
+                    unsubEv();
+                };
+            }, [user]);
+
+            // --- HELPERS ---
+            const requestSort = (key) => {
+                let direction = 'asc';
+                if (sortConfig.key === key && sortConfig.direction === 'asc') direction = 'desc';
+                setSortConfig({ key, direction });
+            };
+
+            const formatIDR = (amount) => {
+                return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(amount || 0);
+            };
+
+            const formatDate = (dateString) => {
+                const options = { day: 'numeric', month: 'long', year: 'numeric' };
+                return new Date(dateString).toLocaleDateString('id-ID', options);
+            };
+
+            const getTodayString = () => new Date().toISOString().split('T')[0];
+
+            const getParticipantHTM = (baseHtm, category) => {
+                const htm = Number(baseHtm);
+                switch(category) {
+                    case 'Kiper': return htm * 0.5;
+                    case 'Pelajar': return htm * 0.8;
+                    case 'Pengurus': return 0;
+                    case 'Pemain':
+                    default: return htm;
+                }
+            };
+
+            // --- CALCULATIONS ---
+            const manualIncome = transactions.filter(t => t.type === 'in').reduce((acc, t) => acc + t.amount, 0);
+            const manualExpense = transactions.filter(t => t.type === 'out').reduce((acc, t) => acc + t.amount, 0);
+            const piutangLunas = transactions.filter(t => t.type === 'piutang' && t.status === 'Lunas').reduce((acc, t) => acc + t.amount, 0);
+            const hutangLunas = transactions.filter(t => t.type === 'hutang' && t.status === 'Lunas').reduce((acc, t) => acc + t.amount, 0);
+            const manualPiutangAktif = transactions.filter(t => t.type === 'piutang' && t.status === 'Belum').reduce((acc, t) => acc + t.amount, 0);
+            const totalHutangAktif = transactions.filter(t => t.type === 'hutang' && t.status === 'Belum').reduce((acc, t) => acc + t.amount, 0);
+
+            let eventsIncome = 0;
+            let eventsExpense = 0;
+            let eventPiutangAktif = 0;
+            let eventPiutangList = [];
+            
+            const pastEvents = events.filter(ev => ev.date < getTodayString());
+
+            pastEvents.forEach(ev => {
+                ev.participants.forEach(p => {
+                    const htm = getParticipantHTM(ev.htm, p.category);
+                    if (p.status === 'Hadir') {
+                        if (p.isPaid) {
+                            eventsIncome += htm;
+                        } else if (htm > 0) {
+                            eventPiutangAktif += htm;
+                            eventPiutangList.push({
+                                id: `ev-${ev.id}-p-${p.id}`,
+                                isEventPiutang: true,
+                                eventId: ev.id,
+                                participantId: p.id,
+                                type: 'piutang',
+                                amount: htm,
+                                desc: `Tunggakan HTM: ${p.name} (${ev.title})`,
+                                date: ev.date,
+                                status: 'Belum'
+                            });
+                        }
+                    }
+                });
+                eventsExpense += ev.expenses.reduce((sum, exp) => sum + exp.amount, 0);
+            });
+
+            const totalPiutangAktif = manualPiutangAktif + eventPiutangAktif;
+            const totalIncomeFisik = manualIncome + piutangLunas + eventsIncome;
+            const totalExpenseFisik = manualExpense + hutangLunas + eventsExpense;
+            const totalKasBalance = totalIncomeFisik - totalExpenseFisik;
+
+            const allTransactions = [...transactions, ...eventPiutangList].sort((a, b) => new Date(b.date) - new Date(a.date));
+
+            // --- HANDLERS: DATABASE OPERATIONS ---
+            
+            // Kas Operations
+            const handleAddTransaction = async (e) => {
+                e.preventDefault();
+                const formData = new FormData(e.target);
+                const type = formData.get('type');
+                const newTx = {
+                    id: Date.now(),
+                    type: type,
+                    amount: Number(formData.get('amount')),
+                    desc: formData.get('desc'),
+                    date: formData.get('date'),
+                    status: (type === 'in' || type === 'out') ? 'Lunas' : 'Belum'
+                };
+                await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'transactions', String(newTx.id)), newTx);
+                setIsKasModalOpen(false);
+            };
+
+            const handleDeleteTransaction = async (id) => {
+                await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'transactions', String(id)));
+            };
+
+            const handleMarkTransactionLunas = async (tx) => {
+                if (tx.isEventPiutang) {
+                    const ev = events.find(e => e.id === tx.eventId);
+                    if (ev) {
+                        const updatedParticipants = ev.participants.map(p => 
+                            p.id === tx.participantId ? { ...p, isPaid: true } : p
+                        );
+                        await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'events', String(tx.eventId)), { ...ev, participants: updatedParticipants });
+                    }
+                } else {
+                    const t = transactions.find(t => t.id === tx.id);
+                    if (t) {
+                        await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'transactions', String(tx.id)), { ...t, status: 'Lunas' });
+                    }
+                }
+            };
+
+            // Event Operations
+            const handleAddEvent = async (e) => {
+                e.preventDefault();
+                const formData = new FormData(e.target);
+                const newEv = {
+                    id: Date.now(),
+                    title: formData.get('title'),
+                    type: formData.get('type'),
+                    date: formData.get('date'),
+                    time: formData.get('time'),
+                    location: formData.get('location'),
+                    htm: 0,
+                    participants: [],
+                    expenses: []
+                };
+                await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'events', String(newEv.id)), newEv);
+                setIsEventModalOpen(false);
+            };
+
+            const handleDeleteEvent = async (id) => {
+                await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'events', String(id)));
+                if (selectedEventId === id) setSelectedEventId(null);
+            };
+
+            const handleUpdateHTM = async (eventId, newHtm) => {
+                const ev = events.find(e => e.id === eventId);
+                if(ev) await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'events', String(eventId)), { ...ev, htm: Number(newHtm) });
+            };
+
+            const handleAddParticipant = async (e, eventId) => {
+                e.preventDefault();
+                const name = e.target.name.value;
+                const category = e.target.category.value;
+                if (!name) return;
+                
+                const ev = events.find(e => e.id === eventId);
+                if (ev) {
+                    const newP = { id: Date.now(), name, category, status: 'Hadir', isPaid: category === 'Pengurus' };
+                    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'events', String(eventId)), { ...ev, participants: [...ev.participants, newP] });
+                }
+                e.target.reset();
+            };
+
+            const handleUpdateParticipantCategory = async (eventId, participantId, newCategory) => {
+                const ev = events.find(e => e.id === eventId);
+                if (ev) {
+                    const updatedP = ev.participants.map(p => 
+                        p.id === participantId ? { ...p, category: newCategory, isPaid: newCategory === 'Pengurus' ? true : p.isPaid } : p
+                    );
+                    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'events', String(eventId)), { ...ev, participants: updatedP });
+                }
+            };
+
+            const handleTogglePayment = async (eventId, participantId) => {
+                const ev = events.find(e => e.id === eventId);
+                if (ev) {
+                    const updatedP = ev.participants.map(p => p.id === participantId ? { ...p, isPaid: !p.isPaid } : p);
+                    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'events', String(eventId)), { ...ev, participants: updatedP });
+                }
+            };
+
+            const handleToggleStatus = async (eventId, participantId) => {
+                const ev = events.find(e => e.id === eventId);
+                if (ev) {
+                    const updatedP = ev.participants.map(p => p.id === participantId ? { ...p, status: p.status === 'Hadir' ? 'Cancel' : 'Hadir' } : p);
+                    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'events', String(eventId)), { ...ev, participants: updatedP });
+                }
+            };
+
+            const handleDeleteParticipant = async (eventId, participantId) => {
+                const ev = events.find(e => e.id === eventId);
+                if (ev) {
+                    const updatedP = ev.participants.filter(p => p.id !== participantId);
+                    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'events', String(eventId)), { ...ev, participants: updatedP });
+                }
+            };
+
+            const handleAddBulkParticipants = async (e) => {
+                e.preventDefault();
+                const formData = new FormData(e.target);
+                const categories = ['pemain', 'kiper', 'pelajar', 'pengurus'];
+                const categoryMap = { 'pemain': 'Pemain', 'kiper': 'Kiper', 'pelajar': 'Pelajar', 'pengurus': 'Pengurus' };
+                
+                let newParticipants = [];
+                let currentId = Date.now();
+
+                categories.forEach(cat => {
+                    const text = formData.get(cat);
+                    if (text) {
+                        const names = text.split('\n').map(n => n.trim()).filter(n => n);
+                        names.forEach(name => {
+                            newParticipants.push({
+                                id: currentId++, name, category: categoryMap[cat], status: 'Hadir', isPaid: categoryMap[cat] === 'Pengurus'
+                            });
+                        });
+                    }
+                });
+
+                if (newParticipants.length > 0) {
+                    const ev = events.find(e => e.id === selectedEventId);
+                    if (ev) {
+                        await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'events', String(selectedEventId)), { ...ev, participants: [...ev.participants, ...newParticipants] });
+                    }
+                }
+                setIsBulkModalOpen(false);
+            };
+
+            const handleAddExpense = async (e, eventId) => {
+                e.preventDefault();
+                const desc = e.target.desc.value;
+                const amount = Number(e.target.amount.value);
+                if (!desc || !amount) return;
+                
+                const ev = events.find(e => e.id === eventId);
+                if (ev) {
+                    const newE = { id: Date.now(), desc, amount };
+                    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'events', String(eventId)), { ...ev, expenses: [...ev.expenses, newE] });
+                }
+                e.target.reset();
+            };
+
+            const handleDeleteExpense = async (eventId, expenseId) => {
+                const ev = events.find(e => e.id === eventId);
+                if (ev) {
+                    const updatedE = ev.expenses.filter(exp => exp.id !== expenseId);
+                    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'events', String(eventId)), { ...ev, expenses: updatedE });
+                }
+            };
+
+            // --- COMPONENTS ---
+            if (isLoading) {
+                return (
+                    <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 gap-4 text-emerald-600">
+                        <div className="w-12 h-12 border-4 border-emerald-200 border-t-emerald-600 rounded-full animate-spin"></div>
+                        <p className="font-medium text-slate-500">Menyinkronkan data komunitas...</p>
+                    </div>
+                );
+            }
+
+            const TabButton = ({ id, label, icon: Icon }) => (
+                <button
+                    onClick={() => { setActiveTab(id); setSelectedEventId(null); }}
+                    className={`flex items-center gap-2 px-5 py-3 rounded-xl transition-all duration-300 font-medium ${
+                        activeTab === id 
+                            ? 'bg-emerald-600 text-white shadow-md shadow-emerald-200' 
+                            : 'text-slate-500 hover:bg-slate-100 hover:text-slate-900'
+                    }`}
+                >
+                    <Icon size={20} />
+                    <span className="hidden sm:inline">{label}</span>
+                </button>
+            );
+
+            const EventCard = ({ ev }) => {
+                const isPast = ev.date < getTodayString();
+                const hadirCount = ev.participants.filter(p => p.status === 'Hadir').length;
+                
+                const eventIncome = ev.participants
+                    .filter(p => p.isPaid && p.status === 'Hadir')
+                    .reduce((sum, p) => sum + getParticipantHTM(ev.htm, p.category), 0);
+                const eventExpense = ev.expenses.reduce((sum, exp) => sum + exp.amount, 0);
+                const eventNet = eventIncome - eventExpense;
+
+                return (
+                    <div onClick={() => setSelectedEventId(ev.id)} className={`border rounded-2xl p-5 shadow-sm hover:shadow-md transition-all cursor-pointer relative group ${isPast ? 'bg-slate-50 border-slate-200' : 'bg-white border-emerald-100'}`}>
+                        <button onClick={(e) => { e.stopPropagation(); handleDeleteEvent(ev.id); }} className="absolute top-4 right-4 text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 size={18} /></button>
+                        <div className="flex items-center gap-2 mb-3">
+                            <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${isPast ? 'bg-slate-200 text-slate-600' : 'bg-emerald-100 text-emerald-700'}`}>{isPast ? 'Selesai' : 'Akan Datang'}</span>
+                            <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-blue-50 text-blue-600 border border-blue-100">{ev.type || 'Internal Match'}</span>
+                        </div>
+                        <h3 className="font-bold text-lg text-slate-800 mb-4 pr-6">{ev.title}</h3>
+                        <div className="space-y-2.5 mb-5">
+                            <div className="flex items-center gap-3 text-sm text-slate-600"><CalendarDays size={16} className={isPast ? 'text-slate-400' : 'text-emerald-600'} />{formatDate(ev.date)} • {ev.time}</div>
+                            <div className="flex items-center gap-3 text-sm text-slate-600"><MapPin size={16} className={isPast ? 'text-slate-400' : 'text-emerald-600'} />{ev.location}</div>
+                            <div className="flex items-center gap-3 text-sm text-slate-600"><Users size={16} className={isPast ? 'text-slate-400' : 'text-emerald-600'} />{hadirCount} Peserta Hadir (Base HTM: {formatIDR(ev.htm)})</div>
+                        </div>
+                        <div className="pt-4 border-t border-slate-100 flex justify-between items-center">
+                            <span className="text-xs text-slate-500 font-medium">Rekap Keuangan</span>
+                            <span className={`text-sm font-bold ${eventNet >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>{eventNet >= 0 ? '+' : ''}{formatIDR(eventNet)}</span>
+                        </div>
+                    </div>
+                );
+            };
+
+            const selectedEvent = events.find(e => e.id === selectedEventId);
+
+            return (
+                <div className="min-h-screen font-sans text-slate-800 selection:bg-emerald-200 pb-20">
+                    {/* HEADER & NAV */}
+                    <div className="bg-white sticky top-0 z-10 shadow-sm border-b border-slate-100">
+                        <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
+                            <div className="flex justify-between items-center h-20">
+                                <div className="flex items-center gap-3">
+                                    <div className="w-10 h-10 bg-gradient-to-br from-emerald-500 to-teal-600 rounded-xl flex items-center justify-center text-white font-bold text-xl shadow-lg shadow-emerald-200">KB</div>
+                                    <div>
+                                        <h1 className="font-bold text-xl leading-tight text-slate-900">KasBola</h1>
+                                        <p className="text-xs text-slate-500 font-medium">Manajemen Komunitas</p>
+                                    </div>
+                                </div>
+                                <nav className="flex items-center gap-2">
+                                    <TabButton id="dashboard" label="Dashboard" icon={LayoutDashboard} />
+                                    <TabButton id="event" label="Event" icon={CalendarDays} />
+                                    <TabButton id="kas" label="Buku Kas" icon={Wallet} />
+                                </nav>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* MAIN CONTENT */}
+                    <main className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+                        
+                        {/* VIEW: DASHBOARD */}
+                        {activeTab === 'dashboard' && (
+                            <div className="space-y-6 animate-in fade-in duration-500">
+                                <h2 className="text-2xl font-bold text-slate-900">Ringkasan Komunitas</h2>
+                                
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                                    <div className="bg-gradient-to-br from-emerald-600 to-teal-700 rounded-2xl p-6 text-white shadow-xl shadow-emerald-100 relative overflow-hidden">
+                                        <div className="absolute right-0 top-0 opacity-10 pointer-events-none">
+                                            <Wallet size={120} className="transform translate-x-4 -translate-y-4" />
+                                        </div>
+                                        <p className="text-emerald-100 font-medium mb-1">Total Kas Fisik</p>
+                                        <h3 className="text-3xl font-bold tracking-tight mb-4">{formatIDR(totalKasBalance)}</h3>
+                                        <div className="flex gap-4 text-sm mt-6">
+                                            <div className="bg-white/20 px-3 py-1.5 rounded-lg backdrop-blur-sm">
+                                                <span className="block text-emerald-100 text-xs">Total Pemasukan</span>
+                                                <span className="font-semibold">{formatIDR(totalIncomeFisik)}</span>
+                                            </div>
+                                            <div className="bg-white/20 px-3 py-1.5 rounded-lg backdrop-blur-sm">
+                                                <span className="block text-emerald-100 text-xs">Total Pengeluaran</span>
+                                                <span className="font-semibold">{formatIDR(totalExpenseFisik)}</span>
+                                            </div>
+                                        </div>
+                                        <p className="text-[10px] text-emerald-200 mt-4 italic">*Pemasukan & Pengeluaran event hanya dihitung dari event yang sudah selesai.</p>
+                                    </div>
+
+                                    <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-sm md:col-span-2">
+                                        <div className="flex justify-between items-center mb-4">
+                                            <h3 className="font-bold text-slate-800">Event Terdekat</h3>
+                                            <button onClick={() => setActiveTab('event')} className="text-sm text-emerald-600 font-medium hover:underline">Lihat Semua</button>
+                                        </div>
+                                        <div className="flex gap-4 overflow-x-auto pb-2">
+                                            {events.filter(e => e.date >= getTodayString()).slice(0, 2).map(ev => (
+                                                <div key={ev.id} className="min-w-[280px] border border-emerald-100 bg-emerald-50/30 rounded-xl p-4 flex-1">
+                                                    <h4 className="font-bold text-slate-800 mb-2 truncate">{ev.title}</h4>
+                                                    <div className="flex items-center gap-2 text-sm text-slate-600 mb-1">
+                                                        <CalendarDays size={14} className="text-emerald-600" /> {formatDate(ev.date)}
+                                                    </div>
+                                                    <div className="flex items-center gap-2 text-sm text-slate-600">
+                                                        <MapPin size={14} className="text-emerald-600" /> {ev.location}
+                                                    </div>
+                                                </div>
+                                            ))}
+                                            {events.filter(e => e.date >= getTodayString()).length === 0 && (
+                                                <p className="text-slate-500 text-sm py-4">Belum ada event terjadwal.</p>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-sm mt-6">
+                                    <div className="flex justify-between items-center mb-6">
+                                        <h3 className="font-bold text-slate-800">Riwayat Event Terakhir</h3>
+                                        <button onClick={() => setActiveTab('event')} className="text-sm text-emerald-600 font-medium hover:underline">Kelola Event</button>
+                                    </div>
+                                    <div className="space-y-4">
+                                        {events.filter(e => e.date < getTodayString()).sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 5).map(ev => {
+                                            const eIncome = ev.participants.filter(p => p.isPaid && p.status === 'Hadir').reduce((sum, p) => sum + getParticipantHTM(ev.htm, p.category), 0);
+                                            const eExpense = ev.expenses.reduce((sum, exp) => sum + exp.amount, 0);
+                                            const eNet = eIncome - eExpense;
+                                            const hadirCount = ev.participants.filter(p => p.status === 'Hadir').length;
+
+                                            return (
+                                                <div key={ev.id} className="flex justify-between items-center p-3 hover:bg-slate-50 rounded-xl transition-colors">
+                                                    <div className="flex items-center gap-4">
+                                                        <div className="p-2.5 rounded-xl bg-slate-100 text-slate-500"><CalendarDays size={20} /></div>
+                                                        <div>
+                                                            <p className="font-semibold text-slate-800">{ev.title}</p>
+                                                            <div className="flex items-center gap-3 text-xs text-slate-500 mt-1">
+                                                                <span className="flex items-center gap-1"><Users size={12}/> {hadirCount} Hadir</span>
+                                                                <span className="flex items-center gap-1"><MapPin size={12}/> {ev.location}</span>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                    <div className="text-right">
+                                                        <p className="text-xs font-medium text-slate-500 mb-1">{formatDate(ev.date)}</p>
+                                                        {eNet !== 0 ? (
+                                                            <span className={`text-sm font-bold px-2 py-0.5 rounded-md ${eNet > 0 ? 'bg-emerald-50 text-emerald-600' : 'bg-red-50 text-red-500'}`}>
+                                                                {eNet > 0 ? '+' : ''}{formatIDR(eNet)}
+                                                            </span>
+                                                        ) : (
+                                                            <span className="text-sm font-medium text-slate-400 px-2 py-0.5 bg-slate-100 rounded-md">Rp 0</span>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                        {events.filter(e => e.date < getTodayString()).length === 0 && <p className="text-center text-slate-500 py-4">Belum ada riwayat event.</p>}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* VIEW: EVENT LIST OR DETAIL */}
+                        {activeTab === 'event' && (
+                            <div className="animate-in fade-in duration-500">
+                                {!selectedEventId && (
+                                    <>
+                                        <div className="flex justify-between items-center mb-6">
+                                            <h2 className="text-2xl font-bold text-slate-900">Manajemen Event</h2>
+                                            <button onClick={() => setIsEventModalOpen(true)} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl text-sm font-medium transition-colors flex items-center gap-2"><Plus size={16} /> Tambah Event</button>
+                                        </div>
+                                        <div className="space-y-8">
+                                            <div>
+                                                <h3 className="text-lg font-bold text-slate-800 mb-4 border-b pb-2">Akan Datang</h3>
+                                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                                                    {events.filter(e => e.date >= getTodayString()).map(ev => <EventCard key={ev.id} ev={ev} />)}
+                                                    {events.filter(e => e.date >= getTodayString()).length === 0 && <p className="text-slate-500 text-sm italic col-span-full">Tidak ada event terdekat.</p>}
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <h3 className="text-lg font-bold text-slate-800 mb-4 border-b pb-2">Sudah Terlaksana</h3>
+                                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                                                    {events.filter(e => e.date < getTodayString()).map(ev => <EventCard key={ev.id} ev={ev} />)}
+                                                    {events.filter(e => e.date < getTodayString()).length === 0 && <p className="text-slate-500 text-sm italic col-span-full">Belum ada riwayat event.</p>}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </>
+                                )}
+
+                                {selectedEventId && selectedEvent && (
+                                    <div className="space-y-6 animate-in duration-300">
+                                        <div className="flex items-center gap-4 mb-2">
+                                            <button onClick={() => setSelectedEventId(null)} className="p-2 hover:bg-slate-200 rounded-lg transition-colors text-slate-500"><ChevronLeft size={24} /></button>
+                                            <div>
+                                                <h2 className="text-2xl font-bold text-slate-900 leading-tight">{selectedEvent.title}</h2>
+                                                <p className="text-sm text-slate-500 font-medium flex items-center gap-2 mt-1">
+                                                    <span className="bg-blue-50 text-blue-600 px-2 py-0.5 rounded text-xs font-bold border border-blue-100">{selectedEvent.type || 'Internal Match'}</span>
+                                                    {formatDate(selectedEvent.date)} • {selectedEvent.time} • {selectedEvent.location}
+                                                </p>
+                                            </div>
+                                        </div>
+
+                                        {(() => {
+                                            const income = selectedEvent.participants.filter(p => p.isPaid && p.status === 'Hadir').reduce((sum, p) => sum + getParticipantHTM(selectedEvent.htm, p.category), 0);
+                                            const expense = selectedEvent.expenses.reduce((sum, exp) => sum + exp.amount, 0);
+                                            const net = income - expense;
+
+                                            return (
+                                                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                                                    <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm flex flex-col justify-center">
+                                                        <p className="text-xs text-slate-500 font-medium mb-1">Base HTM (Pemain)</p>
+                                                        <input type="number" value={selectedEvent.htm} onChange={(e) => handleUpdateHTM(selectedEvent.id, e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-md px-2 py-1 font-bold text-slate-800 outline-none focus:ring-1 focus:ring-emerald-500" />
+                                                    </div>
+                                                    <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-4 shadow-sm">
+                                                        <p className="text-xs text-emerald-600 font-medium mb-1">Pemasukan (Lunas & Hadir)</p>
+                                                        <h4 className="text-xl font-bold text-emerald-700">{formatIDR(income)}</h4>
+                                                    </div>
+                                                    <div className="bg-red-50 border border-red-100 rounded-xl p-4 shadow-sm">
+                                                        <p className="text-xs text-red-600 font-medium mb-1">Total Pengeluaran Event</p>
+                                                        <h4 className="text-xl font-bold text-red-700">{formatIDR(expense)}</h4>
+                                                    </div>
+                                                    <div className={`border rounded-xl p-4 shadow-sm ${net >= 0 ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-red-200 text-slate-900'}`}>
+                                                        <p className={`text-xs font-medium mb-1 ${net >= 0 ? 'text-slate-300' : 'text-slate-500'}`}>Surplus / Defisit</p>
+                                                        <h4 className="text-xl font-bold">{net >= 0 ? '+' : ''}{formatIDR(net)}</h4>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })()}
+
+                                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                                            <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm lg:col-span-2 overflow-hidden flex flex-col">
+                                                <div className="flex justify-between items-center mb-4">
+                                                    <h3 className="font-bold text-slate-800 flex items-center gap-2"><Users size={18} className="text-emerald-600"/> Data Peserta</h3>
+                                                    <div className="flex gap-2">
+                                                        <span className="text-xs font-medium bg-emerald-50 text-emerald-700 px-2 py-1 rounded-full border border-emerald-100">{selectedEvent.participants.filter(p=>p.status==='Hadir').length} Hadir</span>
+                                                        <span className="text-xs font-medium bg-slate-100 text-slate-600 px-2 py-1 rounded-full">{selectedEvent.participants.length} Total</span>
+                                                    </div>
+                                                </div>
+                                                <div className="flex flex-col sm:flex-row gap-2 mb-4">
+                                                    <form onSubmit={(e) => handleAddParticipant(e, selectedEvent.id)} className="flex flex-1 gap-2">
+                                                        <input required type="text" name="name" placeholder="Nama..." className="flex-[2] px-3 py-2 text-sm border border-slate-300 rounded-lg outline-none focus:border-emerald-500" />
+                                                        <select required name="category" className="flex-1 px-3 py-2 text-sm border border-slate-300 rounded-lg outline-none bg-white focus:border-emerald-500">
+                                                            <option value="Pemain">Pemain (100%)</option><option value="Kiper">Kiper (50%)</option><option value="Pelajar">Pelajar (80%)</option><option value="Pengurus">Pengurus (0%)</option>
+                                                        </select>
+                                                        <button type="submit" className="bg-slate-900 text-white px-3 py-2 rounded-lg text-sm font-medium hover:bg-slate-800">Tambah</button>
+                                                    </form>
+                                                    <button onClick={() => setIsBulkModalOpen(true)} className="bg-emerald-100 text-emerald-700 px-3 py-2 rounded-lg text-sm font-bold hover:bg-emerald-200 transition-colors whitespace-nowrap border border-emerald-200">+ Massal</button>
+                                                </div>
+                                                <div className="max-h-[400px] overflow-y-auto overflow-x-auto border border-slate-200 rounded-xl">
+                                                    <table className="w-full text-left border-collapse whitespace-nowrap min-w-[500px]">
+                                                        <thead className="bg-slate-50 sticky top-0 z-10">
+                                                            <tr className="text-xs text-slate-500 uppercase tracking-wider border-b border-slate-200">
+                                                                <th className="p-3 font-bold cursor-pointer hover:bg-slate-200" onClick={() => requestSort('name')}><div className="flex items-center gap-1">Nama <ArrowUpDown size={12}/></div></th>
+                                                                <th className="p-3 font-bold cursor-pointer hover:bg-slate-200" onClick={() => requestSort('category')}><div className="flex items-center gap-1">Kategori <ArrowUpDown size={12}/></div></th>
+                                                                <th className="p-3 font-bold">Nominal</th>
+                                                                <th className="p-3 font-bold cursor-pointer hover:bg-slate-200" onClick={() => requestSort('status')}><div className="flex items-center gap-1">Hadir <ArrowUpDown size={12}/></div></th>
+                                                                <th className="p-3 font-bold cursor-pointer hover:bg-slate-200" onClick={() => requestSort('isPaid')}><div className="flex items-center gap-1">Bayar <ArrowUpDown size={12}/></div></th>
+                                                                <th className="p-3 font-bold text-center">Aksi</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody className="divide-y divide-slate-100">
+                                                            {(() => {
+                                                                const sortedParticipants = [...selectedEvent.participants].sort((a, b) => {
+                                                                    let aValue = a[sortConfig.key]; let bValue = b[sortConfig.key];
+                                                                    if (typeof aValue === 'string') aValue = aValue.toLowerCase();
+                                                                    if (typeof bValue === 'string') bValue = bValue.toLowerCase();
+                                                                    if (aValue < bValue) return sortConfig.direction === 'asc' ? -1 : 1;
+                                                                    if (aValue > bValue) return sortConfig.direction === 'asc' ? 1 : -1;
+                                                                    return 0;
+                                                                });
+
+                                                                return sortedParticipants.map(p => {
+                                                                    const individualHtm = getParticipantHTM(selectedEvent.htm, p.category);
+                                                                    const isCancel = p.status === 'Cancel';
+                                                                    return (
+                                                                        <tr key={p.id} className={`hover:bg-slate-50/80 transition-colors ${isCancel ? 'bg-slate-50 opacity-75' : ''}`}>
+                                                                            <td className="p-3"><span className={`font-semibold text-sm ${isCancel ? 'text-slate-500 line-through' : 'text-slate-800'}`}>{p.name}</span></td>
+                                                                            <td className="p-3">
+                                                                                <select value={p.category} onChange={(e) => handleUpdateParticipantCategory(selectedEvent.id, p.id, e.target.value)} disabled={isCancel}
+                                                                                    className={`text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-md border outline-none cursor-pointer ${isCancel ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed' : 'bg-blue-50 text-blue-600 border-blue-100 hover:bg-blue-100'}`}
+                                                                                >
+                                                                                    <option value="Pemain">PEMAIN</option><option value="Kiper">KIPER</option><option value="Pelajar">PELAJAR</option><option value="Pengurus">PENGURUS</option>
+                                                                                </select>
+                                                                            </td>
+                                                                            <td className="p-3"><span className={`font-semibold text-sm ${isCancel ? 'text-slate-400' : 'text-slate-700'}`}>{individualHtm === 0 ? 'Rp 0' : formatIDR(individualHtm)}</span></td>
+                                                                            <td className="p-3">
+                                                                                <button onClick={() => handleToggleStatus(selectedEvent.id, p.id)} className={`flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-md w-24 justify-center ${!isCancel ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-600'}`}>
+                                                                                    {!isCancel ? <UserCheck size={14}/> : <UserX size={14}/>} {!isCancel ? 'Hadir' : 'Cancel'}
+                                                                                </button>
+                                                                            </td>
+                                                                            <td className="p-3">
+                                                                                {individualHtm > 0 ? (
+                                                                                    <button onClick={() => handleTogglePayment(selectedEvent.id, p.id)} className={`flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-md w-24 justify-center ${p.isPaid ? 'bg-teal-100 text-teal-700' : 'bg-slate-100 text-slate-500'}`}>
+                                                                                        {p.isPaid ? <CheckCircle2 size={14}/> : <Circle size={14}/>} {p.isPaid ? 'Lunas' : 'Belum'}
+                                                                                    </button>
+                                                                                ) : <span className="text-xs font-bold text-slate-400 px-2.5 py-1 flex justify-center w-24 border border-slate-200 bg-slate-50 rounded-md">Gratis</span>}
+                                                                            </td>
+                                                                            <td className="p-3 text-center"><button onClick={() => handleDeleteParticipant(selectedEvent.id, p.id)} className="text-slate-400 hover:text-red-500 p-1"><Trash2 size={16}/></button></td>
+                                                                        </tr>
+                                                                    );
+                                                                });
+                                                            })()}
+                                                            {selectedEvent.participants.length === 0 && <tr><td colSpan="6" className="text-center text-sm text-slate-400 py-8">Belum ada peserta yang didaftarkan.</td></tr>}
+                                                        </tbody>
+                                                    </table>
+                                                </div>
+                                            </div>
+
+                                            <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm h-fit">
+                                                <div className="flex justify-between items-center mb-4"><h3 className="font-bold text-slate-800 flex items-center gap-2"><DollarSign size={18} className="text-red-500"/> Pengeluaran Event</h3></div>
+                                                <form onSubmit={(e) => handleAddExpense(e, selectedEvent.id)} className="flex gap-2 mb-4">
+                                                    <input required type="text" name="desc" placeholder="Keperluan..." className="flex-[2] px-3 py-2 text-sm border border-slate-300 rounded-lg outline-none focus:border-emerald-500" />
+                                                    <input required type="number" name="amount" min="1" placeholder="Nominal Rp" className="flex-1 px-3 py-2 text-sm border border-slate-300 rounded-lg outline-none focus:border-emerald-500" />
+                                                    <button type="submit" className="bg-slate-900 text-white px-3 py-2 rounded-lg text-sm font-medium hover:bg-slate-800">Catat</button>
+                                                </form>
+                                                <div className="space-y-2 max-h-[400px] overflow-y-auto pr-2">
+                                                    {selectedEvent.expenses.map(exp => (
+                                                        <div key={exp.id} className="flex items-center justify-between p-2.5 border border-slate-100 rounded-xl hover:bg-slate-50 transition-colors">
+                                                            <span className="font-medium text-slate-800 text-sm truncate pr-2">{exp.desc}</span>
+                                                            <div className="flex items-center gap-3 shrink-0">
+                                                                <span className="text-sm font-bold text-red-600">-{formatIDR(exp.amount)}</span>
+                                                                <button onClick={() => handleDeleteExpense(selectedEvent.id, exp.id)} className="text-slate-400 hover:text-red-500"><X size={16}/></button>
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                    {selectedEvent.expenses.length === 0 && <p className="text-center text-sm text-slate-400 py-4">Belum ada catatan pengeluaran.</p>}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        {/* VIEW: KAS & HUTANG PIUTANG */}
+                        {activeTab === 'kas' && (
+                            <div className="animate-in fade-in duration-500">
+                                <div className="flex justify-between items-center mb-6">
+                                    <div>
+                                        <h2 className="text-2xl font-bold text-slate-900">Buku Kas & Tagihan</h2>
+                                        <p className="text-sm text-slate-500">Manajemen uang kas fisik, piutang (tagihan), dan hutang.</p>
+                                    </div>
+                                    <button onClick={() => setIsKasModalOpen(true)} className="bg-slate-900 hover:bg-slate-800 text-white px-4 py-2 rounded-xl text-sm font-medium transition-colors flex items-center gap-2">
+                                        <Plus size={16} /> Catat Keuangan
+                                    </button>
+                                </div>
+
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                                    <div className="bg-white border border-emerald-100 rounded-xl p-5 shadow-sm">
+                                        <div className="flex items-center gap-3 mb-2 text-emerald-600">
+                                            <Wallet size={20}/> <span className="font-semibold text-sm">Total Kas Fisik</span>
+                                        </div>
+                                        <h3 className="text-2xl font-bold text-slate-800">{formatIDR(totalKasBalance)}</h3>
+                                        <p className="text-xs text-slate-500 mt-1">Uang yang saat ini ada / dipegang</p>
+                                    </div>
+                                    <div className="bg-white border border-blue-100 rounded-xl p-5 shadow-sm">
+                                        <div className="flex items-center gap-3 mb-2 text-blue-600">
+                                            <ArrowUpFromLine size={20}/> <span className="font-semibold text-sm">Total Piutang Aktif</span>
+                                        </div>
+                                        <h3 className="text-2xl font-bold text-slate-800">{formatIDR(totalPiutangAktif)}</h3>
+                                        <p className="text-xs text-slate-500 mt-1">Uang di pihak luar & Tunggakan Event</p>
+                                    </div>
+                                    <div className="bg-white border border-red-100 rounded-xl p-5 shadow-sm">
+                                        <div className="flex items-center gap-3 mb-2 text-red-600">
+                                            <ArrowDownToLine size={20}/> <span className="font-semibold text-sm">Total Hutang Aktif</span>
+                                        </div>
+                                        <h3 className="text-2xl font-bold text-slate-800">{formatIDR(totalHutangAktif)}</h3>
+                                        <p className="text-xs text-slate-500 mt-1">Kewajiban bayar komunitas</p>
+                                    </div>
+                                </div>
+
+                                <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                                    <div className="overflow-x-auto">
+                                        <table className="w-full text-left border-collapse min-w-[700px]">
+                                            <thead>
+                                                <tr className="bg-slate-50 border-b border-slate-200 text-sm text-slate-500 uppercase tracking-wider">
+                                                    <th className="p-4 font-medium">Tanggal</th>
+                                                    <th className="p-4 font-medium">Keterangan</th>
+                                                    <th className="p-4 font-medium">Jenis</th>
+                                                    <th className="p-4 font-medium text-right">Nominal</th>
+                                                    <th className="p-4 font-medium text-center">Status</th>
+                                                    <th className="p-4 font-medium text-center">Aksi</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-slate-100">
+                                                {allTransactions.map(tx => {
+                                                    let typeProps = { label: '', color: '' };
+                                                    if (tx.type === 'in') typeProps = { label: 'Pemasukan', color: 'bg-emerald-100 text-emerald-700' };
+                                                    if (tx.type === 'out') typeProps = { label: 'Pengeluaran', color: 'bg-red-100 text-red-700' };
+                                                    if (tx.type === 'piutang') typeProps = { label: 'Piutang', color: 'bg-blue-100 text-blue-700' };
+                                                    if (tx.type === 'hutang') typeProps = { label: 'Hutang', color: 'bg-orange-100 text-orange-700' };
+
+                                                    return (
+                                                        <tr key={tx.id} className={`hover:bg-slate-50/50 transition-colors ${tx.isEventPiutang ? 'bg-blue-50/30' : ''}`}>
+                                                            <td className="p-4 text-sm text-slate-600 whitespace-nowrap">{formatDate(tx.date)}</td>
+                                                            <td className="p-4 font-medium text-slate-800">
+                                                                <div className="flex items-center gap-2">
+                                                                    {tx.desc} 
+                                                                    {tx.isEventPiutang && <Info size={14} className="text-blue-500" title="Tunggakan otomatis dari Event" />}
+                                                                </div>
+                                                            </td>
+                                                            <td className="p-4">
+                                                                <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold ${typeProps.color}`}>
+                                                                    {typeProps.label}
+                                                                </span>
+                                                            </td>
+                                                            <td className="p-4 text-right font-semibold whitespace-nowrap text-slate-800">
+                                                                {formatIDR(tx.amount)}
+                                                            </td>
+                                                            <td className="p-4 text-center">
+                                                                {tx.status === 'Lunas' ? (
+                                                                    <span className="inline-flex items-center gap-1 text-xs font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded-md">
+                                                                        <CheckCircle2 size={14}/> Lunas
+                                                                    </span>
+                                                                ) : (
+                                                                    <button 
+                                                                        onClick={() => handleMarkTransactionLunas(tx)}
+                                                                        className="inline-flex items-center gap-1 text-xs font-bold text-white bg-slate-800 hover:bg-slate-700 px-3 py-1.5 rounded-md transition-colors"
+                                                                        title="Klik jika sudah dilunasi"
+                                                                    >
+                                                                        Tandai Lunas
+                                                                    </button>
+                                                                )}
+                                                            </td>
+                                                            <td className="p-4 text-center">
+                                                                {tx.isEventPiutang ? (
+                                                                    <span className="text-xs text-slate-400 italic">Data Event</span>
+                                                                ) : (
+                                                                    <button onClick={() => handleDeleteTransaction(tx.id)} className="text-slate-400 hover:text-red-500 transition-colors p-1" title="Hapus"><Trash2 size={18} /></button>
+                                                                )}
+                                                            </td>
+                                                        </tr>
+                                                    );
+                                                })}
+                                                {allTransactions.length === 0 && <tr><td colSpan="6" className="p-8 text-center text-slate-500">Belum ada catatan transaksi.</td></tr>}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </main>
+
+                    {/* --- MODALS --- */}
+                    
+                    {/* Modal Kas Umum */}
+                    {isKasModalOpen && (
+                        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+                            <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl animate-in zoom-in-95 duration-200">
+                                <div className="flex justify-between items-center p-5 border-b border-slate-100">
+                                    <div><h3 className="font-bold text-lg text-slate-900">Catat Transaksi Manual</h3></div>
+                                    <button onClick={() => setIsKasModalOpen(false)} className="text-slate-400 hover:text-slate-600"><X size={20}/></button>
+                                </div>
+                                <form onSubmit={handleAddTransaction} className="p-5 space-y-4">
+                                    <div>
+                                        <label className="block text-sm font-medium text-slate-700 mb-2">Jenis Transaksi</label>
+                                        <div className="grid grid-cols-2 gap-3">
+                                            <label className="cursor-pointer">
+                                                <input type="radio" name="type" value="in" defaultChecked className="peer sr-only" />
+                                                <div className="text-center px-2 py-2.5 border border-slate-200 rounded-xl peer-checked:bg-emerald-50 peer-checked:border-emerald-500 peer-checked:text-emerald-700 font-bold text-sm transition-all">
+                                                    Pemasukan<br/><span className="text-[10px] font-normal opacity-80">(Kas Bertambah)</span>
+                                                </div>
+                                            </label>
+                                            <label className="cursor-pointer">
+                                                <input type="radio" name="type" value="out" className="peer sr-only" />
+                                                <div className="text-center px-2 py-2.5 border border-slate-200 rounded-xl peer-checked:bg-red-50 peer-checked:border-red-500 peer-checked:text-red-700 font-bold text-sm transition-all">
+                                                    Pengeluaran<br/><span className="text-[10px] font-normal opacity-80">(Kas Berkurang)</span>
+                                                </div>
+                                            </label>
+                                            <label className="cursor-pointer">
+                                                <input type="radio" name="type" value="piutang" className="peer sr-only" />
+                                                <div className="text-center px-2 py-2.5 border border-slate-200 rounded-xl peer-checked:bg-blue-50 peer-checked:border-blue-500 peer-checked:text-blue-700 font-bold text-sm transition-all">
+                                                    Piutang<br/><span className="text-[10px] font-normal opacity-80">(Tagihan ke orang)</span>
+                                                </div>
+                                            </label>
+                                            <label className="cursor-pointer">
+                                                <input type="radio" name="type" value="hutang" className="peer sr-only" />
+                                                <div className="text-center px-2 py-2.5 border border-slate-200 rounded-xl peer-checked:bg-orange-50 peer-checked:border-orange-500 peer-checked:text-orange-700 font-bold text-sm transition-all">
+                                                    Hutang<br/><span className="text-[10px] font-normal opacity-80">(Kewajiban Komunitas)</span>
+                                                </div>
+                                            </label>
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-slate-700 mb-1">Nominal (Rp)</label>
+                                        <input required type="number" name="amount" min="1" className="w-full px-4 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all" placeholder="Contoh: 150000" />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-slate-700 mb-1">Keterangan</label>
+                                        <input required type="text" name="desc" className="w-full px-4 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all" placeholder="Contoh: Beli Bola Baru / Kasbon Budi" />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-slate-700 mb-1">Tanggal</label>
+                                        <input required type="date" name="date" defaultValue={getTodayString()} className="w-full px-4 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all" />
+                                    </div>
+                                    <div className="pt-2">
+                                        <button type="submit" className="w-full bg-slate-900 hover:bg-slate-800 text-white font-medium py-2.5 rounded-xl transition-colors">
+                                            Simpan Transaksi
+                                        </button>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Modal Event */}
+                    {isEventModalOpen && (
+                        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+                            <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl animate-in zoom-in-95 duration-200">
+                                <div className="flex justify-between items-center p-5 border-b border-slate-100">
+                                    <h3 className="font-bold text-lg text-slate-900">Tambah Event Baru</h3>
+                                    <button onClick={() => setIsEventModalOpen(false)} className="text-slate-400 hover:text-slate-600"><X size={20}/></button>
+                                </div>
+                                <form onSubmit={handleAddEvent} className="p-5 space-y-4">
+                                    <div>
+                                        <label className="block text-sm font-medium text-slate-700 mb-1">Nama Event</label>
+                                        <input required type="text" name="title" className="w-full px-4 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all" placeholder="Contoh: Fun Football vs Bintaro FC" />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-slate-700 mb-1">Tipe Event</label>
+                                        <select required name="type" className="w-full px-4 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all bg-white">
+                                            <option value="Internal Match">Internal Match</option>
+                                            <option value="Friendly">Friendly</option>
+                                            <option value="Trofeo">Trofeo</option>
+                                        </select>
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="block text-sm font-medium text-slate-700 mb-1">Tanggal</label>
+                                            <input required type="date" name="date" defaultValue={getTodayString()} className="w-full px-4 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all" />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-slate-700 mb-1">Waktu</label>
+                                            <input required type="time" name="time" defaultValue="19:00" className="w-full px-4 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all" />
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-slate-700 mb-1">Lokasi</label>
+                                        <input required type="text" name="location" className="w-full px-4 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all" placeholder="Nama Lapangan / Stadion" />
+                                    </div>
+                                    <div className="pt-2">
+                                        <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-medium py-2.5 rounded-xl transition-colors">
+                                            Jadwalkan Event
+                                        </button>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Modal Input Massal Peserta */}
+                    {isBulkModalOpen && (
+                        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+                            <div className="bg-white rounded-2xl w-full max-w-2xl shadow-2xl animate-in zoom-in-95 duration-200 flex flex-col max-h-[90vh]">
+                                <div className="flex justify-between items-center p-5 border-b border-slate-100 shrink-0">
+                                    <div>
+                                        <h3 className="font-bold text-lg text-slate-900">Tambah Peserta Massal</h3>
+                                        <p className="text-sm text-slate-500">Tulis/Paste daftar nama. Pisahkan tiap nama dengan baris baru (Enter).</p>
+                                    </div>
+                                    <button onClick={() => setIsBulkModalOpen(false)} className="text-slate-400 hover:text-slate-600"><X size={20}/></button>
+                                </div>
+                                <form onSubmit={handleAddBulkParticipants} className="p-5 overflow-y-auto space-y-4">
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                        <div><label className="block text-sm font-bold text-slate-700 mb-2">Pemain (100%)</label><textarea name="pemain" rows="4" className="w-full px-3 py-2 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none text-sm resize-none" placeholder="Budi&#10;Andi"></textarea></div>
+                                        <div><label className="block text-sm font-bold text-slate-700 mb-2">Kiper (50%)</label><textarea name="kiper" rows="4" className="w-full px-3 py-2 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none text-sm resize-none" placeholder="Deni&#10;Eko"></textarea></div>
+                                        <div><label className="block text-sm font-bold text-slate-700 mb-2">Pelajar (80%)</label><textarea name="pelajar" rows="4" className="w-full px-3 py-2 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none text-sm resize-none" placeholder="Fajar"></textarea></div>
+                                        <div><label className="block text-sm font-bold text-slate-700 mb-2">Pengurus (0%)</label><textarea name="pengurus" rows="4" className="w-full px-3 py-2 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none text-sm resize-none" placeholder="Pak Yono"></textarea></div>
+                                    </div>
+                                    <div className="pt-4 border-t border-slate-100"><button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-medium py-2.5 rounded-xl transition-colors">Simpan Peserta Massal</button></div>
+                                </form>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        const rootElement = document.getElementById('root');
+        const root = createRoot(rootElement);
+        root.render(<App />);
+    </script>
+</body>
+</html>
